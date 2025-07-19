@@ -2,7 +2,8 @@
 
 This project is an ESP32-based digital clock that synchronizes time from an NTP (Network Time Protocol) server and displays the current time, date, and day of the week on a 128x64 OLED display. It connects to WiFi, fetches accurate time data, and updates the display every second.
 
----/home/mdmurad/Pictures/Screenshots/Screenshot From 2025-07-19 04-32-35.png
+<img width="1741" height="832" alt="Screenshot From 2025-07-19 04-32-35" src="https://github.com/user-attachments/assets/aad83205-6d9e-4b6a-8583-aad2e568b4c7" />
+
 
 ## Features
 
