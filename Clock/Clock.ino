@@ -4,86 +4,125 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "SPIFFS.h"
 
 
-const char* ssid = "Big_Sh@rk$";   //wifi ssid
-const char* password = "bigbullnei";  // wifi pass
+const char* ssid = "Big_Sh@rk$";
+const char* password = "bigbullnei";
 
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
+#define SAVE_INTERVAL 3600 // 1 hour setup your own logic time 
+time_t lastSaveTime = 0;
+time_t lastEp = 0;
+unsigned long lastM = 0;
+unsigned long lastDisplayUpdate = 0;
+const unsigned long displayInterval = 1000;
 
-WiFiUDP UP;
-NTPClient timeClient(UP, "bd.pool.ntp.org", 6 * 3600); 
 
+WiFiUDP udp;
+NTPClient timeClient(udp, "bd.pool.ntp.org", 6 * 3600);
 
+// Date strings
 String days[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 String months[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
+// Safe millis difference to handle overflow
+unsigned long millisDiff(unsigned long present, unsigned long past) {
+  if (present >= past) return present - past;
+  return (0xFFFFFFFF - past) + present + 1;
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(1000);  
+  delay(1000);
+
   
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED not found"));
-    while(true);
+    while (true);
   }
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
 
- 
-  connectWiFi();
-
-  timeClient.begin();
   
-  // Serial.println("NTP Client started");
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Failed to mount SPIFFS");
+  } else {
+    readFile();
+  }
+
+  connectWiFi();
+  timeClient.begin();
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected - retrying...");
-    delay(2000);
-    connectWiFi(); 
-    return;
+  unsigned long now = millis();
+
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    timeClient.update();
+    time_t epochTime = timeClient.getEpochTime();
+    unsigned long pMillis = now;
+
+    if (epochTime > lastEp + millisDiff(pMillis, lastM) / 1000 - 5) {
+      lastEp = epochTime;
+      lastM = pMillis;
+       // write file every save_interval time letter
+      if (epochTime - lastSaveTime >= SAVE_INTERVAL) {
+        saveFile(lastEp);
+        lastSaveTime = epochTime;
+      }
+    }
+  } else {
+     Serial.println("fallback mode active");
   }
 
-  timeClient.update();
-  time_t epochTime = timeClient.getEpochTime();
-  struct tm *ptm = gmtime ((time_t *)&epochTime);
+   // work every 1 sec 
+  if (millisDiff(now, lastDisplayUpdate) >= displayInterval) {
+    lastDisplayUpdate = now;
 
-  String timeStr = timeClient.getFormattedTime();
+    time_t presentTime = lastEp + millisDiff(now, lastM) / 1000;
+    struct tm *ptm = gmtime((time_t *)&presentTime);
 
-  int day = ptm->tm_mday;
-  String monthName = months[ptm->tm_mon];
-  int year = ptm->tm_year + 1900;
-  String dateStr = String(day) + " " + monthName + " " + String(year);
+      char timeStr[12];
+     int hour = ptm->tm_hour;
+     String amPm = "AM";
 
-  String dayName= days[timeClient.getDay()];
-//  Serial.println(timeStr);
-//  Serial.println(dateStr);
-//  Serial.println(dayName);
-//  Serial.println();
+    if (hour >= 12) {
+      amPm = "PM";
+      if (hour > 12)
+      hour -= 12;
+    }
+    else if (hour == 0) 
+    hour = 12;
 
-  display.clearDisplay();
+    sprintf(timeStr, "%02d:%02d:%02d %s", hour, ptm->tm_min, ptm->tm_sec, amPm.c_str());
 
-  display.setCursor(0, 0);
-  display.setTextSize(2);
-  display.println(timeStr); 
+   char dateStr[20];
+   sprintf(dateStr, "%02d %s %04d", ptm->tm_mday, months[ptm->tm_mon].c_str(), ptm->tm_year + 1900);
 
-  display.setTextSize(1);
-  display.setCursor(0, 25);
-  display.println(dateStr); 
+    String dayName = days[ptm->tm_wday];
 
-  display.setCursor(0, 40);
-  display.println("Day: " + dayName);
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(2);
+    display.println(timeStr);
 
-  display.display();
-  delay(1000);
+    display.setTextSize(1);
+    display.setCursor(0, 25);
+    display.println(dateStr);
+
+    display.setCursor(0, 40);
+    display.println("Day: " + dayName);
+    display.display();
+  }
 }
 
 void connectWiFi() {
@@ -93,40 +132,54 @@ void connectWiFi() {
   display.display();
 
   Serial.print("Connecting WiFi");
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    WiFi.begin(ssid, password);
+  WiFi.begin(ssid, password);
+  unsigned long cTime = millis();
 
-    unsigned long cTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millisDiff(millis(), cTime) < 20000) {
+    delay(500);
+    display.print(".");
+    display.display();
+  }
 
-    while (WiFi.status() != WL_CONNECTED && millis() - cTime < 20000)
-    {
-      delay(500);
-      display.print(".");
-      display.display();
-      
-      // Serial.print(".");
-    }
+  if (WiFi.status() == WL_CONNECTED) {
+    display.clearDisplay();
+    display.println("WiFi connected!");
+    display.display();
+  } else {
+    display.clearDisplay();
+    display.println("WiFi failed.");
+    display.println("Will use last saved time");
+    display.display();
+  }
+}
 
-    if (WiFi.status() == WL_CONNECTED) {
-      // Serial.println("\nWiFi connected!");
-      // Serial.print("IP address: ");
-      // Serial.println(WiFi.localIP());
+void saveFile(time_t presentTime) {
+  File file = SPIFFS.open("/time.txt", "w");
+  if (!file) {
+    Serial.println("Failed to open time.txt");
+    return;
+  }
+  file.write((uint8_t*)&presentTime, sizeof(time_t));
+  file.close();
+  Serial.printf("Saved time to SPIFFS: %lu\n", presentTime);
+}
 
-      
-      display.clearDisplay();
-      display.println("WiFi connected!");
-      display.display();
-      break; 
-    }
-    else {
-      // Serial.println("\n connection Failed Restart 2 sec ..");
-      
-      display.clearDisplay();
-      display.println("WiFi connection failed.");
-      display.println("Trying to connected again ...");
-      display.display();
-      delay(2000);  
-    }
+void readFile() {
+  File file = SPIFFS.open("/time.txt", "r");
+  if (!file) {
+    Serial.println("No time.txt found");
+    return;
+  }
+
+  time_t storedTime = 0;
+  file.read((uint8_t*)&storedTime, sizeof(time_t));
+  file.close();
+
+  if (storedTime > 1000000000) { 
+    lastEp = storedTime;
+    lastM = millis();
+    Serial.printf("Loaded time from SPIFFS: %lu\n", lastEp);
+  } else {
+    Serial.println("Stored time invalid");
   }
 }
